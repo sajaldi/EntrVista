@@ -1,0 +1,24 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Env
+.env
+
+# AI Cache & Models (Aggressive)
+.fastembed_cache/
+**/blobs/
+**/models/
+*.onnx
+
+# SQLite
+*.db
+*.db-journal
+
+# Tauri
+src-tauri/target/
+src-tauri/binaries/
+
+# OS
+.DS_Store
+Thumbs.db

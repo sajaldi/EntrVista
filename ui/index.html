@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Juda7w AI</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="titlebar" data-tauri-drag-region>
+      <div class="brand" data-tauri-drag-region>
+        <span class="logo">JUDA7W <small>AI</small></span>
+        <div id="status-dot" class="dot"></div>
+        <div id="context-badge" class="badge">GEMINI</div>
+      </div>
+      <div class="window-controls">
+        <button id="minimize-btn">&#8211;</button>
+        <button id="maximize-btn">&#9723;</button>
+        <button id="close-btn">&times;</button>
+      </div>
+    </header>
+
+    <main id="app">
+      <div id="status-message">
+        <h1>Escuchando Sistema</h1>
+        <p>Transcribiendo audio en tiempo real...</p>
+      </div>
+    </main>
+
+    <footer>
+      <div id="transcript-feed"></div>
+    </footer>
+
+    <!-- Modal para expandir respuestas de la IA -->
+    <div id="answer-modal" class="modal-overlay" style="display:none;">
+      <div class="modal-box">
+        <button id="modal-close">&times;</button>
+        <div id="modal-content"></div>
+      </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
