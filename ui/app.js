@@ -14,6 +14,7 @@ document.getElementById('modal-close').onclick = () => modal.style.display = 'no
 modal.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; };
 
 function openModal(text, isLoading = false) {
+  if (!isLoading && (!text || text.trim() === "")) return;
   if (isLoading) {
     modalContent.innerHTML = '<div class="modal-loading"><span></span><span></span><span></span></div>';
   } else {
@@ -147,13 +148,17 @@ function addMessage(text, type) {
     btn.onclick = async (e) => {
       e.stopPropagation();
       bubble.classList.add('loading');
-      openModal('', true);
+      openModal('Connecting to AI...', true);
       try {
+        console.log("🚀 Invoking ask_zai_specifically for:", text);
         const answer = await invoke('ask_zai_specifically', { text });
-        addMessage(answer, 'assistant-answer');
+        if (!answer || answer.trim() === "") {
+          throw new Error("AI returned an empty response. Check if model name is correct.");
+        }
         openModal(answer);
       } catch (err) {
-        openModal(`Error: ${err}`);
+        console.error("❌ AI Error:", err);
+        openModal(`Error reaching AI: ${err}. \n\nCheck terminal for more details.`);
       } finally {
         bubble.classList.remove('loading');
       }

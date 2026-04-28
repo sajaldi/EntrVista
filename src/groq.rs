@@ -46,8 +46,8 @@ impl GroqBrain {
             openrouter_key,
             google_key,
             client: Client::new(),
-            provider: AiProvider::Groq,
-            model: "gemma-4-26b-a4b-it".to_string(),
+            provider: AiProvider::Google,
+            model: "gemini-2.5-flash".to_string(),
             context_chunks,
             prompt_template,
         }
@@ -120,7 +120,7 @@ impl GroqBrain {
         let lower = text.to_lowercase();
         if lower.contains("google") || lower.contains("gemini") {
             self.provider = AiProvider::Google;
-            self.model = "gemini-1.5-flash".to_string();
+            self.model = "gemini-flash-lite-latest".to_string();
         } else if lower.contains("groq") || lower.contains("fast") {
             self.provider = AiProvider::Groq;
             self.model = "llama-3.1-8b-instant".to_string();
@@ -164,6 +164,7 @@ impl GroqBrain {
             .collect();
 
         if options.is_empty() {
+            println!("⚠️ Parsing options failed. Raw response was:\n{}", raw);
             // Fallback: split by newlines if parsing fails
             Ok(raw.lines()
                 .filter(|l| !l.trim().is_empty())

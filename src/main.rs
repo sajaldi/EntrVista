@@ -53,37 +53,33 @@ async fn main() -> Result<()> {
                 let (audio_tx, audio_rx) = mpsc::channel::<Vec<i16>>();
                 let (text_tx, mut text_rx) = tokio_mpsc::channel::<String>(100);
 
-                // Audio Loopback
+                // Audio Capture
                 let (sample_rate, channels) = audio::start_audio_capture(audio_tx).expect("Audio init failed");
 
+                // Start Deepgram
+                let text_tx_clone = text_tx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = deepgram::process_transcription(&deepgram_api_key, audio_rx, text_tx, sample_rate, channels).await {
-                        eprintln!("❌ Deepgram Task Error: {}", e);
+                    if let Err(e) = deepgram::process_transcription(&deepgram_api_key, audio_rx, text_tx_clone, sample_rate, channels).await {
+                        eprintln!("❌ Deepgram Error: {}", e);
                     }
                 });
 
+                // Transcript processing loop
                 while let Some(transcript) = text_rx.recv().await {
-                    // Interim results: just display them, no AI processing
                     if let Some(interim_text) = transcript.strip_prefix("__interim__:") {
                         let _ = handle.emit_all("new-interim", interim_text);
                         continue;
                     }
 
-                    // Final transcript: update context badge and emit to UI
                     {
                         let mut brain_write = brain_clone.write().await;
                         brain_write.update_context(&transcript);
-                        let name = brain_write.get_model_name().to_string();
-                        let _ = handle.emit_all("context-switch", name);
+                        let _ = handle.emit_all("context-switch", brain_write.get_model_name());
                     }
 
                     let _ = handle.emit_all("new-transcript", &transcript);
 
-                    let is_question = transcript.trim().ends_with('?') ||
-                                     transcript.to_lowercase().starts_with("qué");
-
-                    if is_question {
-                        // Generate options for user to pick from
+                    if transcript.trim().ends_with('?') {
                         let brain_read = brain_clone.read().await;
                         if let Ok(options) = brain_read.generate_options(&transcript).await {
                             let _ = handle.emit_all("new-options", serde_json::json!({

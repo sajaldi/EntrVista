@@ -4,12 +4,16 @@ use futures_util::{StreamExt, SinkExt};
 use serde::Deserialize;
 use anyhow::{Result, Context};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use url::Url;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 pub struct DeepgramResponse {
     pub channel: DeepgramChannel,
+    #[serde(default)]
     pub is_final: bool,
+    #[serde(default)]
     pub speech_final: bool,
 }
 
@@ -26,7 +30,7 @@ pub struct DeepgramAlternative {
 
 pub async fn process_transcription(
     api_key: &str,
-    mut audio_rx: Receiver<Vec<i16>>,
+    audio_rx: Receiver<Vec<i16>>,
     text_tx: tokio::sync::mpsc::Sender<String>,
     sample_rate: u32,
     channels: u16,
@@ -46,35 +50,50 @@ pub async fn process_transcription(
     let (ws_stream, response) = match connect_async(request).await {
         Ok(val) => val,
         Err(e) => {
-            return Err(anyhow::anyhow!("Deepgram Connection Error: {}. Ensure your API Key is valid and has credits.", e));
+            return Err(anyhow::anyhow!("Deepgram Connection Error: {}. Ensure your API Key is valid.", e));
         }
     };
     
-    // Status 101 is "Switching Protocols", which is normal for WebSockets
     if !response.status().is_success() && response.status() != 101 {
         return Err(anyhow::anyhow!("Deepgram rejected connection with status: {}", response.status()));
     }
     
     let (mut write, mut read) = ws_stream.split();
-
     println!("Deepgram: WebSocket connection established.");
 
-    // spawn a task to pipe audio from mpsc to websocket
-    let mut write_clone = write;
+    let audio_rx = Arc::new(std::sync::Mutex::new(audio_rx));
+
+    // Task 1: Sender (Audio + KeepAlive)
     let audio_task = tokio::spawn(async move {
-        while let Ok(pcm) = audio_rx.recv() {
-            let bytes: Vec<u8> = pcm.iter().flat_map(|&s| s.to_le_bytes()).collect();
-            if let Err(_) = write_clone.send(Message::Binary(bytes)).await {
+        let mut last_keep_alive = std::time::Instant::now();
+        
+        loop {
+            // Receive audio with timeout to allow KeepAlive checks
+            let audio_rx_clone = Arc::clone(&audio_rx);
+            let pcm_result = tokio::task::spawn_blocking(move || {
+                audio_rx_clone.lock().unwrap().recv_timeout(Duration::from_millis(100))
+            }).await.unwrap();
+
+            // Send audio if we have it
+            if let Ok(data) = pcm_result {
+                let bytes: Vec<u8> = data.iter().flat_map(|&s| s.to_le_bytes()).collect();
+                if let Err(_) = write.send(Message::Binary(bytes)).await { break; }
+            } else if let Err(std::sync::mpsc::RecvTimeoutError::Disconnected) = pcm_result {
                 break;
             }
+
+            // Send KeepAlive every 10 seconds
+            if last_keep_alive.elapsed().as_secs() >= 10 {
+                if let Err(_) = write.send(Message::Text("{\"type\": \"KeepAlive\"}".to_string())).await {
+                    break;
+                }
+                last_keep_alive = std::time::Instant::now();
+            }
         }
-        let _ = write_clone.close().await;
+        let _ = write.close().await;
     });
 
-    // Optional: KeepAlive task every 10 seconds (Deepgram requirement for long periods of silence)
-    // Actually, we'll let it be for now as audio usually flows.
-
-    // Listen for transcription results
+    // Task 2: Receiver
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(text)) => {
@@ -83,18 +102,17 @@ pub async fn process_transcription(
                     if transcript.is_empty() { continue; }
 
                     if resp.is_final {
-                        // Final — send for full processing (question detection, etc.)
-                        if let Err(e) = text_tx.send(transcript.clone()).await {
-                            eprintln!("Failed to send transcript: {}", e);
-                            break;
-                        }
+                        println!("✅ Final Transcript: {}", transcript);
+                        let _ = text_tx.send(transcript.clone()).await;
                     } else {
-                        // Interim — send with a tag so main.rs can just display it without AI processing
                         let _ = text_tx.send(format!("__interim__:{}", transcript)).await;
                     }
                 }
             }
-            Ok(Message::Close(_)) => break,
+            Ok(Message::Close(_)) => {
+                println!("Deepgram: Connection closed by server.");
+                break;
+            }
             Err(e) => {
                 eprintln!("Deepgram Receiver Error: {}", e);
                 break;
