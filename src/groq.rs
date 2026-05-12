@@ -12,28 +12,20 @@ pub enum AiProvider {
 }
 
 pub struct GroqBrain {
-    groq_key: String,
+    groq_keys: Vec<String>,
+    current_key_idx: std::sync::atomic::AtomicUsize,
     openrouter_key: String,
     google_key: String,
     client: Client,
     provider: AiProvider,
     model: String,
-    /// Chunks loaded from contex.md at startup
-    context_chunks: Vec<String>,
-    /// Master prompt template loaded from prompt.md
     prompt_template: String,
+    pub conversation_history: Vec<serde_json::Value>,
 }
 
 impl GroqBrain {
-    pub fn new(groq_key: String, openrouter_key: String, google_key: String) -> Self {
-        let context_chunks = Self::load_context_file("contex.md");
+    pub fn new(groq_keys: Vec<String>, openrouter_key: String, google_key: String) -> Self {
         let prompt_template = Self::load_prompt_file("prompt.md");
-
-        if context_chunks.is_empty() {
-            println!("⚠️  contex.md is empty or not found.");
-        } else {
-            println!("📄 Loaded {} context chunk(s) from contex.md", context_chunks.len());
-        }
 
         if prompt_template.is_empty() {
             println!("⚠️  prompt.md is empty or not found. Using default prompt.");
@@ -42,14 +34,28 @@ impl GroqBrain {
         }
 
         Self {
-            groq_key,
+            groq_keys,
+            current_key_idx: std::sync::atomic::AtomicUsize::new(0),
             openrouter_key,
             google_key,
             client: Client::new(),
-            provider: AiProvider::Google,
-            model: "gemini-2.5-flash".to_string(),
-            context_chunks,
+            provider: AiProvider::Groq,
+            model: "llama-3.3-70b-versatile".to_string(),
             prompt_template,
+            conversation_history: Vec::new(),
+        }
+    }
+
+    /// Get the current Groq key and rotate if needed
+    fn get_groq_key(&self) -> &str {
+        let idx = self.current_key_idx.load(std::sync::atomic::Ordering::SeqCst);
+        &self.groq_keys[idx % self.groq_keys.len()]
+    }
+
+    fn rotate_key(&self) {
+        if self.groq_keys.len() > 1 {
+            println!("🔄 Rate limit or error detected. Rotating to next API key...");
+            self.current_key_idx.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -58,89 +64,33 @@ impl GroqBrain {
         fs::read_to_string(path).unwrap_or_default().trim().to_string()
     }
 
-    /// Build the full system prompt by injecting context and question into the template
-    fn build_prompt(&self, question: &str) -> String {
-        let personal_context = if self.context_chunks.is_empty() {
-            "No personal context provided.".to_string()
+    /// Build the system prompt by injecting specific relevant context
+    fn build_system_prompt(&self, relevant_experiences: &[String]) -> String {
+        let personal_context = if relevant_experiences.is_empty() {
+            "No specific relevant context found for this question in your experiences.".to_string()
         } else {
-            self.context_chunks.iter().take(3).cloned().collect::<Vec<_>>().join("\n\n---\n\n")
+            relevant_experiences.join("\n\n---\n\n")
         };
 
         if self.prompt_template.is_empty() {
-            // Fallback if prompt.md is missing
             return format!(
-                "You are an elite interview coach. Always respond in English using a natural STAR narrative.\nContext:\n{}\nQuestion: {}",
-                personal_context, question
+                "You are an elite interview coach. Always respond in English using a natural STAR narrative.\nContext:\n{}",
+                personal_context
             );
         }
 
+        // Replace context and remove the question placeholder since it goes in a user message now
         self.prompt_template
             .replace("{{CONTEXT}}", &personal_context)
-            .replace("{{QUESTION}}", question)
+            .replace("INTERVIEW QUESTION: {{QUESTION}}", "")
     }
 
-    /// Read contex.md and split into chunks if too large
-    fn load_context_file(path: &str) -> Vec<String> {
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c.trim().to_string(),
-            Err(_) => return vec![],
-        };
-
-        if content.is_empty() {
-            return vec![];
-        }
-
-        if content.len() <= CHUNK_SIZE {
-            return vec![content];
-        }
-
-        // Split by paragraphs first (double newline), then by size
-        let mut chunks: Vec<String> = Vec::new();
-        let mut current = String::new();
-
-        for paragraph in content.split("\n\n") {
-            if current.len() + paragraph.len() + 2 > CHUNK_SIZE && !current.is_empty() {
-                chunks.push(current.trim().to_string());
-                current = String::new();
-            }
-            if !current.is_empty() {
-                current.push_str("\n\n");
-            }
-            current.push_str(paragraph);
-        }
-
-        if !current.trim().is_empty() {
-            chunks.push(current.trim().to_string());
-        }
-
-        chunks
-    }
-
-    pub fn update_context(&mut self, text: &str) {
-        let lower = text.to_lowercase();
-        if lower.contains("google") || lower.contains("gemini") {
-            self.provider = AiProvider::Google;
-            self.model = "gemini-flash-lite-latest".to_string();
-        } else if lower.contains("groq") || lower.contains("fast") {
-            self.provider = AiProvider::Groq;
-            self.model = "llama-3.1-8b-instant".to_string();
-        }
-    }
-
-    pub fn get_model_name(&self) -> &str {
-        match self.provider {
-            AiProvider::Groq => "GROQ",
-            AiProvider::OpenRouter => "OPENROUTER",
-            AiProvider::Google => "GOOGLE",
-        }
-    }
-
-    /// Generate 3 short answer options based on the question and personal context
-    pub async fn generate_options(&self, question: &str) -> Result<Vec<String>> {
-        let personal_context = if self.context_chunks.is_empty() {
-            "No personal context provided.".to_string()
+    /// Generate 3 short answer options based on the question and relevant experiences from RAG
+    pub async fn generate_options(&self, question: &str, relevant_experiences: &[String]) -> Result<Vec<String>> {
+        let personal_context = if relevant_experiences.is_empty() {
+            "No specific relevant context found.".to_string()
         } else {
-            self.context_chunks.iter().take(3).cloned().collect::<Vec<_>>().join("\n\n---\n\n")
+            relevant_experiences.join("\n\n---\n\n")
         };
 
         let prompt = format!(
@@ -148,7 +98,7 @@ impl GroqBrain {
             personal_context, question
         );
 
-        let raw = self.call_ai_raw(&prompt).await?;
+        let raw = self.call_ai_messages(vec![serde_json::json!({"role": "user", "content": prompt})]).await?;
         
         // Parse the numbered list into Vec<String>
         let options: Vec<String> = raw
@@ -176,125 +126,108 @@ impl GroqBrain {
         }
     }
 
-    /// Internal: call the AI with a raw prompt, returns text directly
-    async fn call_ai_raw(&self, prompt: &str) -> Result<String> {
+    pub fn update_context(&mut self, _text: &str) {
+        // Exclusively use Groq as requested
+        self.provider = AiProvider::Groq;
+        self.model = "llama-3.3-70b-versatile".to_string();
+    }
+
+    pub fn get_model_name(&self) -> &str {
         match self.provider {
-            AiProvider::Google => {
-                let url = format!(
-                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-                    self.model, self.google_key
-                );
-                let body = serde_json::json!({
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}]
-                });
-                let res = self.client.post(&url).json(&body).send().await?;
-                let j: serde_json::Value = res.json().await?;
-                
-                // Log the full response for debugging
-                println!("🔍 Google raw response: {}", serde_json::to_string_pretty(&j).unwrap_or_default());
+            AiProvider::Groq => "GROQ",
+            AiProvider::OpenRouter => "OPENROUTER",
+            AiProvider::Google => "GOOGLE",
+        }
+    }
 
-                let text = j["candidates"][0]["content"]["parts"][0]["text"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Google API error: {:?}", j))?;
-                Ok(text.to_string())
-            },
-            AiProvider::Groq | AiProvider::OpenRouter => {
-                let (url, api_key) = match self.provider {
-                    AiProvider::Groq => ("https://api.groq.com/openai/v1/chat/completions", &self.groq_key),
-                    AiProvider::OpenRouter => ("https://openrouter.ai/api/v1/chat/completions", &self.openrouter_key),
-                    _ => unreachable!(),
-                };
+    pub fn clear_session(&mut self) {
+        self.conversation_history.clear();
+        println!("🧹 AI session history cleared.");
+    }
 
-                let body = serde_json::json!({
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}]
-                });
+    /// Internal: call the AI with a JSON messages array
+    async fn call_ai_messages(&self, messages: Vec<serde_json::Value>) -> Result<String> {
+        let max_retries = self.groq_keys.len();
+        let mut last_error = None;
 
-                let mut req = self.client.post(url)
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .json(&body);
-
-                if matches!(self.provider, AiProvider::OpenRouter) {
-                    req = req.header("HTTP-Referer", "https://juda7w.app").header("X-Title", "Juda7w");
+        for _ in 0..max_retries {
+            let (url, api_key) = match self.provider {
+                AiProvider::Groq => ("https://api.groq.com/openai/v1/chat/completions", self.get_groq_key()),
+                AiProvider::OpenRouter => ("https://openrouter.ai/api/v1/chat/completions", self.openrouter_key.as_str()),
+                AiProvider::Google => {
+                    let url = format!(
+                        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                        self.model, self.google_key
+                    );
+                    // For Google, we map the messages to their format
+                    let mut contents = Vec::new();
+                    for msg in &messages {
+                        let role = if msg["role"] == "assistant" { "model" } else { "user" };
+                        let text = msg["content"].as_str().unwrap_or("");
+                        contents.push(json!({"role": role, "parts": [{"text": text}]}));
+                    }
+                    let body = json!({ "contents": contents });
+                    let res = self.client.post(&url).json(&body).send().await?;
+                    let j: serde_json::Value = res.json().await?;
+                    let text = j["candidates"][0]["content"]["parts"][0]["text"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("Google API error: {:?}", j))?;
+                    return Ok(text.to_string());
                 }
+            };
 
-                let res = req.send().await?;
+            let body = serde_json::json!({
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.8,
+                "top_p": 0.9
+            });
+
+            let mut req = self.client.post(url)
+                .header("Authorization", format!("Bearer {}", api_key))
+                .json(&body);
+
+            if matches!(self.provider, AiProvider::OpenRouter) {
+                req = req.header("HTTP-Referer", "https://juda7w.app").header("X-Title", "Juda7w");
+            }
+
+            let res = req.send().await?;
+            
+            if res.status().is_success() {
                 let j: serde_json::Value = res.json().await?;
-                
-                println!("🔍 LLM raw response: {}", serde_json::to_string_pretty(&j).unwrap_or_default());
-
                 let text = j["choices"][0]["message"]["content"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("LLM API error: {:?}", j))?;
-                Ok(text.to_string())
+                return Ok(text.to_string());
+            } else if res.status().as_u16() == 429 || res.status().is_server_error() {
+                self.rotate_key();
+                last_error = Some(anyhow::anyhow!("Status {}: {:?}", res.status(), res.text().await?));
+                continue;
+            } else {
+                return Err(anyhow::anyhow!("API Error {}: {}", res.status(), res.text().await?));
             }
         }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("All API keys failed")))
     }
 
-    pub async fn ask(&self, question: &str, _experiences: Vec<String>) -> Result<String> {
-        // The full prompt is built from prompt.md + contex.md + question
-        let full_prompt = self.build_prompt(question);
-
-        let (url, api_key) = match self.provider {
-            AiProvider::Groq => ("https://api.groq.com/openai/v1/chat/completions", &self.groq_key),
-            AiProvider::OpenRouter => ("https://openrouter.ai/api/v1/chat/completions", &self.openrouter_key),
-            AiProvider::Google => {
-                let url = format!(
-                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-                    self.model, self.google_key
-                );
-                // For Google, the full_prompt already contains everything
-                let body = json!({
-                    "contents": [{"role": "user", "parts": [{"text": full_prompt}]}]
-                });
-                let res = self.client.post(&url).json(&body).send().await?;
-                let j: serde_json::Value = res.json().await?;
-                return Ok(j["candidates"][0]["content"]["parts"][0]["text"]
-                    .as_str().unwrap_or("").to_string());
-            }
-        };
-
-        let body = json!({
-            "model": self.model,
-            "messages": [
-                {"role": "user", "content": full_prompt}
-            ]
-        });
-
-        let mut req = self.client.post(url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .json(&body);
-
-        if matches!(self.provider, AiProvider::OpenRouter) {
-            req = req.header("HTTP-Referer", "https://juda7w.app")
-                     .header("X-Title", "Juda7w AI Assistant");
+    pub async fn ask(&mut self, question: &str, relevant_experiences: Vec<String>) -> Result<String> {
+        let system_prompt = self.build_system_prompt(&relevant_experiences);
+        
+        let mut messages = vec![json!({"role": "system", "content": system_prompt})];
+        
+        // Keep only last 10 messages (5 exchanges)
+        if self.conversation_history.len() > 10 {
+            self.conversation_history = self.conversation_history[self.conversation_history.len() - 10..].to_vec();
         }
+        
+        messages.extend(self.conversation_history.clone());
+        messages.push(json!({"role": "user", "content": question}));
 
-        let res = req.send().await?;
-        let json_res: serde_json::Value = res.json().await?;
-        let answer = json_res["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("AI Error: {:?}", json_res))?;
+        let response = self.call_ai_messages(messages).await?;
+        
+        self.conversation_history.push(json!({"role": "user", "content": question}));
+        self.conversation_history.push(json!({"role": "assistant", "content": response.clone()}));
 
-        Ok(answer.to_string())
-    }
-
-    async fn ask_google(&self, url: &str, system: &str, user: &str) -> Result<String> {
-        let body = json!({
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": format!("{}\n\nQuestion: {}", system, user)}]
-                }
-            ]
-        });
-
-        let res = self.client.post(url).json(&body).send().await?;
-        let json_res: serde_json::Value = res.json().await?;
-        let answer = json_res["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Google AI Error: {:?}", json_res))?;
-
-        Ok(answer.to_string())
+        Ok(response)
     }
 }

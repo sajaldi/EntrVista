@@ -6,13 +6,53 @@
     <title>Juda7w AI</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <style>
+      #webcam-container {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 140px;
+        height: 100px;
+        border-radius: 12px;
+        overflow: hidden;
+        border: 2px solid rgba(255,255,255,0.1);
+        z-index: 9999;
+        opacity: 0.8; 
+        background: transparent;
+        transition: all 0.3s;
+        box-shadow: 0 0 20px rgba(255,255,255,0.2);
+        display: block;
+        border: 2px solid rgba(0,255,204,0.4);
+      }
+      #webcam-video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+      #hand-pointer {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        background: #ff4b4b;
+        border-radius: 50%;
+        pointer-events: none;
+        display: none;
+        z-index: 10000;
+        box-shadow: 0 0 10px #ff4b4b;
+      }
+    </style>
 </head>
 <body>
     <header class="titlebar" data-tauri-drag-region>
       <div class="brand" data-tauri-drag-region>
         <span class="logo">JUDA7W <small>AI</small></span>
         <div id="status-dot" class="dot"></div>
-        <div id="context-badge" class="badge">GEMINI</div>
+        <div id="context-badge" class="badge">GROQ</div>
+        <div class="lang-selector">
+          <button id="lang-en-btn" class="lang-btn active">EN</button>
+          <button id="lang-es-btn" class="lang-btn">ES</button>
+        </div>
+        <button id="camera-toggle-btn" class="icon-btn" title="Toggle Camera/Gestures">📷</button>
+        <button id="settings-btn" class="icon-btn" title="Manage Predefined Answers">⚙️</button>
+        <button id="clear-session-btn" class="icon-btn" title="New Interview / Clear Session">🧹</button>
       </div>
       <div class="window-controls">
         <button id="minimize-btn">&#8211;</button>
@@ -21,6 +61,27 @@
       </div>
     </header>
 
+    <!-- Barra de preguntas FIJA para que no se mueva -->
+    <div id="quick-questions" style="-webkit-app-region: no-drag; z-index: 9999;">
+      <button class="q-chip lifesaver" style="-webkit-app-region: no-drag;" onclick="window.askPredefined('Lifesaver 1')">Lifesaver 🛟</button>
+      <button class="q-chip" style="-webkit-app-region: no-drag; background: #00f2fe; color: black; font-weight: bold;" onclick="window.askPredefined('Tell me about yourself')">Self Intro</button>
+      <button class="q-chip" style="-webkit-app-region: no-drag; background: #00f2fe; color: black; font-weight: bold;" onclick="window.askPredefined('Why do you want to work here?')">Why Us?</button>
+      <button class="q-chip" style="-webkit-app-region: no-drag; background: #00f2fe; color: black; font-weight: bold;" onclick="window.askPredefined('What are your strengths and weaknesses?')">Strengths</button>
+      <button class="q-chip" style="-webkit-app-region: no-drag; background: #00f2fe; color: black; font-weight: bold;" onclick="window.askPredefined('Tell me about a time you showed leadership')">Leadership</button>
+      <button class="q-chip" style="-webkit-app-region: no-drag; background: #00f2fe; color: black; font-weight: bold;" onclick="window.askPredefined('Tell me about a difficult challenge at work')">Challenge</button>
+    </div>
+
+    <section id="teleprompter">
+      <!-- Transcripciones normales -->
+      <div id="transcript-feed"></div>
+      
+      <!-- Capa independiente para la IA -->
+      <div id="ai-view" style="display: none;">
+        <button id="close-ai-btn">&times;</button>
+        <div id="ai-content" class="bubble assistant-answer"></div>
+      </div>
+    </section>
+
     <main id="app">
       <div id="status-message">
         <h1>Escuchando Sistema</h1>
@@ -28,9 +89,33 @@
       </div>
     </main>
 
-    <footer>
-      <div id="transcript-feed"></div>
-    </footer>
+    <!-- Modal para CRUD de respuestas predefinidas -->
+    <div id="settings-modal" class="modal-overlay" style="display:none;">
+      <div class="modal-box" style="max-width: 800px;">
+        <button id="settings-close" class="modal-close-btn">&times;</button>
+        <h2 id="settings-drag-handle" style="color: var(--accent); margin-bottom: 20px; cursor: move; user-select: none;">Manage Predefined Content</h2>
+        
+        <div class="settings-tabs">
+          <button id="tab-responses" class="tab-btn active">Responses</button>
+          <button id="tab-lifesavers" class="tab-btn">Lifesavers</button>
+        </div>
+
+        <div id="settings-list" class="settings-list">
+          <!-- Items will be loaded here -->
+        </div>
+
+        <div class="settings-form">
+          <h3 id="form-title">Add New Response</h3>
+          <input type="hidden" id="edit-id">
+          <input type="text" id="item-title" placeholder="Title (e.g. Tell me about yourself)">
+          <textarea id="item-content" placeholder="Content..."></textarea>
+          <div class="form-actions">
+            <button id="save-item-btn" class="q-chip" style="background: var(--accent); color: black;">Save Item</button>
+            <button id="cancel-edit-btn" class="q-chip" style="display:none;">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Modal para expandir respuestas de la IA -->
     <div id="answer-modal" class="modal-overlay" style="display:none;">
@@ -40,6 +125,18 @@
       </div>
     </div>
 
+    <div id="multi-actions" style="display: none;">
+      <button id="multi-copy-btn">Copy 📋</button>
+      <button id="multi-analyze-btn">Analyze 🧠</button>
+    </div>
+
+    <div id="webcam-container">
+      <video id="webcam-video" autoplay playsinline></video>
+      <canvas id="webcam-canvas" style="display:none;"></canvas>
+      <div id="hand-pointer"></div>
+      <div id="gesture-debug" style="position:absolute; bottom:0; width:100%; background:rgba(0,0,0,0.7); color:#00ffcc; font-size:10px; text-align:center; padding:2px;">Initializing...</div>
+      <button id="switch-camera-btn" style="position:absolute; top:5px; right:5px; background:rgba(255,255,255,0.2); border:none; color:white; font-size:10px; cursor:pointer; padding:2px 5px; border-radius:4px; z-index:10001;">🔄</button>
+    </div>
     <script type="module" src="app.js"></script>
 </body>
 </html>

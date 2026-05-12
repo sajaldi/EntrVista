@@ -2,7 +2,7 @@ use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
 use tokio_tungstenite::tungstenite::Message;
 use futures_util::{StreamExt, SinkExt};
 use serde::Deserialize;
-use anyhow::{Result, Context};
+use anyhow::Result;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use url::Url;
@@ -34,10 +34,11 @@ pub async fn process_transcription(
     text_tx: tokio::sync::mpsc::Sender<String>,
     sample_rate: u32,
     channels: u16,
+    language: &str,
 ) -> Result<()> {
     let url_str = format!(
-        "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate={}&channels={}&interim_results=true&smart_format=true",
-        sample_rate, channels
+        "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate={}&channels={}&interim_results=true&smart_format=true&language={}",
+        sample_rate, channels, language
     );
     let url = Url::parse(&url_str)?;
     
