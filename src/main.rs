@@ -24,6 +24,7 @@ struct AppState {
 struct PredefinedData {
     responses: Vec<db::PredefinedItem>,
     lifesavers: Vec<db::PredefinedItem>,
+    facts: Vec<db::PredefinedItem>,
 }
 
 #[tauri::command]
@@ -32,10 +33,15 @@ async fn ask_zai_specifically(text: String, state: State<'_, AppState>) -> Resul
     let mut db = db::Database::new().map_err(|e| e.to_string())?;
     let mut relevant = db.query_experiences(&text, 3).unwrap_or_default();
     
-    // Inject predefined content as context
+    // Inject predefined content and facts as context
     if let Ok(responses) = db.get_responses() {
         for resp in responses {
             relevant.push(format!("PREDEFINED SCRIPT (Topic: {}): {}", resp.title, resp.content));
+        }
+    }
+    if let Ok(facts) = db.get_facts() {
+        for fact in facts {
+            relevant.push(format!("CORE FACT ({}): {}", fact.title, fact.content));
         }
     }
     
@@ -49,10 +55,15 @@ async fn generate_options(question: String, state: State<'_, AppState>) -> Resul
     let mut db = db::Database::new().map_err(|e| e.to_string())?;
     let mut relevant = db.query_experiences(&question, 3).unwrap_or_default();
 
-    // Inject predefined content as context
+    // Inject predefined content and facts as context
     if let Ok(responses) = db.get_responses() {
         for resp in responses {
             relevant.push(format!("PREDEFINED SCRIPT (Topic: {}): {}", resp.title, resp.content));
+        }
+    }
+    if let Ok(facts) = db.get_facts() {
+        for fact in facts {
+            relevant.push(format!("CORE FACT ({}): {}", fact.title, fact.content));
         }
     }
 
@@ -80,7 +91,8 @@ async fn get_all_predefined() -> Result<PredefinedData, String> {
     let db = db::Database::new().map_err(|e| e.to_string())?;
     let responses = db.get_responses().map_err(|e| e.to_string())?;
     let lifesavers = db.get_lifesavers().map_err(|e| e.to_string())?;
-    Ok(PredefinedData { responses, lifesavers })
+    let facts = db.get_facts().map_err(|e| e.to_string())?;
+    Ok(PredefinedData { responses, lifesavers, facts })
 }
 
 #[tauri::command]
@@ -88,8 +100,10 @@ async fn save_predefined_item(item_type: String, title: String, content: String)
     let db = db::Database::new().map_err(|e| e.to_string())?;
     if item_type == "response" {
         db.save_response(&title, &content).map_err(|e| e.to_string())?;
-    } else {
+    } else if item_type == "lifesaver" {
         db.save_lifesaver(&title, &content).map_err(|e| e.to_string())?;
+    } else {
+        db.save_fact(&title, &content).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -99,8 +113,10 @@ async fn delete_predefined_item(item_type: String, id: i64) -> Result<(), String
     let db = db::Database::new().map_err(|e| e.to_string())?;
     if item_type == "response" {
         db.delete_response(id).map_err(|e| e.to_string())?;
-    } else {
+    } else if item_type == "lifesaver" {
         db.delete_lifesaver(id).map_err(|e| e.to_string())?;
+    } else {
+        db.delete_fact(id).map_err(|e| e.to_string())?;
     }
     Ok(())
 }

@@ -93,12 +93,18 @@ impl GroqBrain {
             relevant_experiences.join("\n\n---\n\n")
         };
 
-        let prompt = format!(
-            "Based on this professional profile:\n{}\n\nFor the interview question: \"{}\"\n\nGenerate exactly 3 short answer options (one line each) that the candidate could use to answer. Each option must reference a DIFFERENT specific situation, project, or skill from their profile. Be concrete and specific.\n\nRespond ONLY as a numbered list:\n1. ...\n2. ...\n3. ...",
+        let system_message = "You are an elite interview coach. Your task is to generate 3 extremely concise, highly relevant answer options based strictly on the provided context (Predefined Scripts, Facts, and Experiences). Prioritize using the Predefined Scripts if they match the topic.";
+        let user_message = format!(
+            "CONTEXT:\n{}\n\nQUESTION: \"{}\"\n\nGenerate 3 short, specific answer options (one line each). Each must be a different specific angle or project from the context.\n\nRespond ONLY as a numbered list:\n1. [Option A]\n2. [Option B]\n3. [Option C]",
             personal_context, question
         );
 
-        let raw = self.call_ai_messages(vec![serde_json::json!({"role": "user", "content": prompt})]).await?;
+        let messages = vec![
+            serde_json::json!({"role": "system", "content": system_message}),
+            serde_json::json!({"role": "user", "content": user_message})
+        ];
+
+        let raw = self.call_ai_messages(messages).await?;
         
         // Parse the numbered list into Vec<String>
         let options: Vec<String> = raw

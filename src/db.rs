@@ -63,6 +63,16 @@ impl Database {
             [],
         )?;
 
+        // Facts table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS facts (
+                id INTEGER PRIMARY KEY,
+                title TEXT UNIQUE NOT NULL,
+                content TEXT NOT NULL
+            );",
+            [],
+        )?;
+
         println!("Loading embedding model...");
         let mut options = InitOptions::default();
         options.model_name = EmbeddingModel::BGESmallENV15;
@@ -110,6 +120,23 @@ impl Database {
         Ok(results)
     }
 
+    pub fn get_facts(&self) -> Result<Vec<PredefinedItem>> {
+        let mut stmt = self.conn.prepare("SELECT id, title, content FROM facts")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PredefinedItem {
+                id: Some(row.get(0)?),
+                title: row.get(1)?,
+                content: row.get(2)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
     pub fn save_response(&self, title: &str, content: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO responses (title, content) VALUES (?, ?) 
@@ -122,6 +149,15 @@ impl Database {
     pub fn save_lifesaver(&self, title: &str, content: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO lifesavers (title, content) VALUES (?, ?) 
+             ON CONFLICT(title) DO UPDATE SET content = excluded.content",
+            [title, content],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_fact(&self, title: &str, content: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO facts (title, content) VALUES (?, ?) 
              ON CONFLICT(title) DO UPDATE SET content = excluded.content",
             [title, content],
         )?;
@@ -189,6 +225,11 @@ impl Database {
 
     pub fn delete_lifesaver(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM lifesavers WHERE id = ?", [id])?;
+        Ok(())
+    }
+
+    pub fn delete_fact(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM facts WHERE id = ?", [id])?;
         Ok(())
     }
 }

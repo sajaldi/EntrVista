@@ -58,6 +58,7 @@ const modalContent = document.getElementById('modal-content');
 const aiView = document.getElementById('ai-view');
 const aiContent = document.getElementById('ai-content');
 const teleprompter = document.getElementById('teleprompter');
+let lastAiResponseText = ""; // Track the raw text to save it if needed
 
 document.getElementById('modal-close').onclick = () => modal.style.display = 'none';
 document.getElementById('close-ai-btn').onclick = () => aiView.style.display = 'none';
@@ -66,10 +67,31 @@ modal.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; }
 aiView.onclick = (e) => { if (e.target === aiView) aiView.style.display = 'none'; };
 
 function showAiResponse(text) {
+  lastAiResponseText = text; // Store for "Save as Fact"
   aiContent.innerHTML = formatStarResponse(text);
   aiView.style.display = 'flex';
   aiView.scrollTop = 0;
 }
+
+document.getElementById('save-as-fact-btn').onclick = async (e) => {
+  e.stopPropagation(); // Don't close the view
+  if (!lastAiResponseText) return;
+
+  const title = prompt("Enter a title for this Fact:", "Summary of AI response");
+  if (!title) return;
+
+  try {
+    await invoke('save_predefined_item', { 
+      itemType: 'fact', 
+      title: title, 
+      content: lastAiResponseText 
+    });
+    alert("✅ Response saved as Fact!");
+    await initPredefined(); // Refresh local cache
+  } catch (err) {
+    alert("❌ Failed to save fact: " + err);
+  }
+};
 
 function openModal(text, isLoading = false) {
   if (!isLoading && (!text || text.trim() === "")) return;
@@ -302,8 +324,8 @@ function addMessage(text, type) {
 }
 
 // Respuestas persistentes en SQLite
-let predefinedData = { responses: [], lifesavers: [] };
-let currentTab = 'response'; // 'response' or 'lifesaver'
+let predefinedData = { responses: [], lifesavers: [], facts: [] };
+let currentTab = 'response'; // 'response' or 'lifesaver' or 'fact'
 let editingId = null;
 
 const settingsModal = document.getElementById('settings-modal');
@@ -311,6 +333,7 @@ const settingsList = document.getElementById('settings-list');
 const quickQuestions = document.getElementById('quick-questions');
 const tabResponses = document.getElementById('tab-responses');
 const tabLifesavers = document.getElementById('tab-lifesavers');
+const tabFacts = document.getElementById('tab-facts');
 const formTitle = document.getElementById('form-title');
 const itemTitleInput = document.getElementById('item-title');
 const itemContentInput = document.getElementById('item-content');
@@ -322,6 +345,7 @@ async function initPredefined() {
     const data = await invoke('get_all_predefined');
     predefinedData.responses = data.responses;
     predefinedData.lifesavers = data.lifesavers;
+    predefinedData.facts = data.facts;
     renderQuickQuestions();
     console.log("✅ Predefined data loaded from SQLite");
   } catch (err) {
@@ -355,7 +379,8 @@ function renderQuickQuestions() {
 
 function renderSettingsList() {
   settingsList.innerHTML = '';
-  const items = currentTab === 'response' ? predefinedData.responses : predefinedData.lifesavers;
+  const items = currentTab === 'response' ? predefinedData.responses : 
+               (currentTab === 'lifesaver' ? predefinedData.lifesavers : predefinedData.facts);
 
   items.forEach(item => {
     const div = document.createElement('div');
@@ -382,7 +407,7 @@ function startEdit(item) {
   editingId = item.id;
   itemTitleInput.value = item.title;
   itemContentInput.value = item.content;
-  formTitle.innerText = `Edit ${currentTab === 'response' ? 'Response' : 'Lifesaver'}`;
+  formTitle.innerText = `Edit ${currentTab === 'response' ? 'Response' : (currentTab === 'lifesaver' ? 'Lifesaver' : 'Fact')}`;
   cancelEditBtn.style.display = 'block';
   itemTitleInput.focus();
 }
@@ -391,7 +416,7 @@ function resetForm() {
   editingId = null;
   itemTitleInput.value = '';
   itemContentInput.value = '';
-  formTitle.innerText = `Add New ${currentTab === 'response' ? 'Response' : 'Lifesaver'}`;
+  formTitle.innerText = `Add New ${currentTab === 'response' ? 'Response' : (currentTab === 'lifesaver' ? 'Lifesaver' : 'Fact')}`;
   cancelEditBtn.style.display = 'none';
 }
 
@@ -431,6 +456,7 @@ tabResponses.onclick = () => {
   currentTab = 'response';
   tabResponses.classList.add('active');
   tabLifesavers.classList.remove('active');
+  tabFacts.classList.remove('active');
   resetForm();
   renderSettingsList();
 };
@@ -439,6 +465,16 @@ tabLifesavers.onclick = () => {
   currentTab = 'lifesaver';
   tabLifesavers.classList.add('active');
   tabResponses.classList.remove('active');
+  tabFacts.classList.remove('active');
+  resetForm();
+  renderSettingsList();
+};
+
+tabFacts.onclick = () => {
+  currentTab = 'fact';
+  tabFacts.classList.add('active');
+  tabResponses.classList.remove('active');
+  tabLifesavers.classList.remove('active');
   resetForm();
   renderSettingsList();
 };
